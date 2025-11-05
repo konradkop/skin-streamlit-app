@@ -1,0 +1,21 @@
+<<<<<<< HEAD
+streamlit
+tensorflow
+numpy
+pandas
+matplotlib
+pillow
+google-api-python-client
+google-auth
+google-auth-httplib2
+=======
+streamlit
+tensorflow
+numpy
+pandas
+matplotlib
+pillow
+google-api-python-client
+google-auth
+google-auth-httplib2
+>>>>>>> 5c7e6ce1284860145d18562d422baa97362c1532
