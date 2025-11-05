@@ -5,7 +5,7 @@
 # Drive files:
 #   MODEL_FILE_ID        = "15rQdpHiHI9HGBlKpRmlBfOsTmxUCI9m3"
 #   METADATA_FILE_ID     = "11RG8Wf2YOxnN5oGbVXgEv1D5Nh_dAYwi"
-#   DATASET_ZIP_FILE_ID  = "10vow4q65fKTYDLjVvveIpE36dPnyR8hu"
+#   DATASET_ZIP_FILE_ID  = "1oypOScrmWuw3-vS8Mfg8nXj70suIawZt"
 #
 # REQUIREMENT: you must have st.secrets['gdrive_service_account'] configured
 # with your service-account JSON (and that SA must have Viewer access
@@ -33,8 +33,9 @@ MODEL_FILE_ID = "15rQdpHiHI9HGBlKpRmlBfOsTmxUCI9m3"
 METADATA_FILE_ID = "11RG8Wf2YOxnN5oGbVXgEv1D5Nh_dAYwi"
 DATASET_ZIP_FILE_ID = "1oypOScrmWuw3-vS8Mfg8nXj70suIawZt"
 EVAL_ACC_FILE_ID = "1mmjRXdAZpMVQYbOAtGz9adiP55CkT1qN"
-EVAL_CM_FILE_ID  = "1NyqjQldbgzNHqf7n3NQNEdV7wHF9ONDi"
+EVAL_CM_FILE_ID = "1NyqjQldbgzNHqf7n3NQNEdV7wHF9ONDi"
 EVAL_LOSS_FILE_ID = "14Xz86Sn97uHRG_A5f5-xH3zKWGli2arH"
+
 # ---------------------------
 # Page config
 # ---------------------------
@@ -91,16 +92,19 @@ def get_drive_service_from_secrets():
 
     creds_info = dict(st.secrets["gdrive_service_account"])
     scopes = ["https://www.googleapis.com/auth/drive.readonly"]
-    creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_info, scopes=scopes
+    )
     try:
         service = build("drive", "v3", credentials=creds, cache_discovery=False)
         return service
     except Exception:
         return None
 
+
 @st.cache_resource(show_spinner=True)
 def get_dataset_zip_bytes():
-    """Download dataset zip from Drive once and cache the raw bytes."""
+    """Download dataset ZIP from Drive once and cache the raw bytes."""
     if not DATASET_ZIP_FILE_ID:
         raise RuntimeError("DATASET_ZIP_FILE_ID is empty.")
     b = gdrive_download_bytes(DATASET_ZIP_FILE_ID)
@@ -111,7 +115,7 @@ def get_dataset_zip_bytes():
 
 @st.cache_resource(show_spinner=False)
 def get_zip_name_map():
-    """Build a mapping image_id -> zip member name (only JPG files)."""
+    """Build a mapping image_id -> ZIP member name (only JPG files)."""
     zip_bytes = get_dataset_zip_bytes()
     zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
     name_map = {}
@@ -124,6 +128,7 @@ def get_zip_name_map():
 
 @st.cache_data(show_spinner=False)
 def gdrive_download_bytes(file_id: str) -> bytes:
+    """Download a file from Google Drive and return raw bytes."""
     service = get_drive_service_from_secrets()
     if service is None or not file_id:
         return b""
@@ -139,6 +144,7 @@ def gdrive_download_bytes(file_id: str) -> bytes:
     fh.seek(0)
     return fh.read()
 
+
 @st.cache_data(show_spinner=True)
 def load_image_from_drive(file_id: str):
     """Download an image file from Google Drive and return a PIL.Image object."""
@@ -150,16 +156,17 @@ def load_image_from_drive(file_id: str):
     except Exception:
         return None
 
+
 def ensure_drive_available():
     """Check Google Drive connection and show a clear error if it's not ready."""
     service = get_drive_service_from_secrets()
     if service is None:
         st.error(
             "Google Drive is not configured or reachable.\n\n"
-            "请检查：\n"
-            "1. `.streamlit/secrets.toml` 中是否有 [gdrive_service_account]；\n"
-            "2. service account 的 client_email 是否对这三个 Drive 文件有 Viewer 权限；\n"
-            "3. 是否安装了 `google-api-python-client` 和 `google-auth` 等依赖。"
+            "Please check:\n"
+            "1. `.streamlit/secrets.toml` contains a [gdrive_service_account] section;\n"
+            "2. The service account's client_email has Viewer access to all required Drive files;\n"
+            "3. Python packages `google-api-python-client` and `google-auth` are installed."
         )
         st.stop()
 
@@ -171,22 +178,27 @@ def load_model_from_drive() -> tf.keras.Model | None:
         return None
     b = gdrive_download_bytes(MODEL_FILE_ID)
     if not b:
-        raise RuntimeError("Failed to download model bytes from Drive (check file ID & sharing).")
+        raise RuntimeError(
+            "Failed to download model bytes from Drive (check file ID & sharing)."
+        )
 
     tmp = tempfile.NamedTemporaryFile(suffix=".keras", delete=False)
     tmp.write(b)
     tmp.flush()
     tmp.close()
 
-    # If model is from AutoKeras, we try to add custom objects.
+    # If model is from AutoKeras, try to add custom objects.
     custom_objects = None
     try:
         import autokeras as ak  # type: ignore
+
         custom_objects = ak.CUSTOM_OBJECTS
     except Exception:
         custom_objects = None
 
-    model = tf.keras.models.load_model(tmp.name, custom_objects=custom_objects, compile=False)
+    model = tf.keras.models.load_model(
+        tmp.name, custom_objects=custom_objects, compile=False
+    )
     return model
 
 
@@ -215,6 +227,7 @@ def prepare_dataset_dir_from_drive_zip() -> str:
 # Image / Grad-CAM utilities
 # ---------------------------
 def preprocess_input(img_pil, size):
+    """Resize and scale image to [0,1] range."""
     img = img_pil.convert("RGB").resize((size, size))
     arr = np.asarray(img).astype("float32") / 255.0
     return arr
@@ -243,14 +256,7 @@ def find_last_conv_like_layer(keras_model):
 
 
 def make_gradcam_heatmap(img_array, keras_model, last_conv_layer_name, class_index=None):
-    """
-    Classic Grad-CAM implementation.
-
-    - Uses the model's predicted probability for a specific class.
-    - Computes the gradient of that probability with respect to the feature maps
-      of the given convolutional layer.
-    - Returns a normalized heatmap (0–1) resized to match the input image.
-    """
+    """Classic Grad-CAM implementation."""
     # Ensure the input is a rank-4 float32 tensor: (1, H, W, 3)
     img_array = np.asarray(img_array, dtype="float32")
     if img_array.ndim == 3:
@@ -268,7 +274,7 @@ def make_gradcam_heatmap(img_array, keras_model, last_conv_layer_name, class_ind
 
     # Record gradients of the target class score w.r.t. conv feature maps
     with tf.GradientTape() as tape:
-        conv_out, preds = grad_model(img_tensor, training=False)  # conv_out: (1, Hc, Wc, C)
+        conv_out, preds = grad_model(img_tensor, training=False)
 
         # Handle multi-output models: preds can be a list/tuple of tensors.
         if isinstance(preds, (list, tuple)):
@@ -283,18 +289,18 @@ def make_gradcam_heatmap(img_array, keras_model, last_conv_layer_name, class_ind
         class_channel = preds_tensor[:, class_index]
 
     # Compute gradients
-    grads = tape.gradient(class_channel, conv_out)  # shape: (1, Hc, Wc, C)
+    grads = tape.gradient(class_channel, conv_out)
     if grads is None:
         raise RuntimeError("Gradients are None. Check conv layer name / model structure.")
 
     # Global-average-pool the gradients over spatial dimensions to get channel weights
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))  # shape: (C,)
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
     # Remove batch dimension from the feature map
-    conv_out = conv_out[0]  # shape: (Hc, Wc, C)
+    conv_out = conv_out[0]
 
-    # Weight each channel by its importance and sum across channels → (Hc, Wc)
-    heatmap = tf.reduce_sum(conv_out * pooled_grads, axis=-1)  # Tensor, shape: (Hc, Wc)
+    # Weight each channel by its importance and sum across channels
+    heatmap = tf.reduce_sum(conv_out * pooled_grads, axis=-1)
 
     # Apply ReLU
     heatmap = tf.nn.relu(heatmap)
@@ -305,24 +311,20 @@ def make_gradcam_heatmap(img_array, keras_model, last_conv_layer_name, class_ind
         # Avoid division by zero; return a blank heatmap
         return np.zeros_like(heatmap.numpy()), class_index
 
-    heatmap = heatmap / max_val  # still a Tensor
+    heatmap = heatmap / max_val
 
     # Resize to the size of the input image (H, W)
     H, W = img_array.shape[1], img_array.shape[2]
-    heatmap = tf.image.resize(
-        heatmap[..., tf.newaxis], (H, W)     # Tensor indexing, never Python list
-    )
+    heatmap = tf.image.resize(heatmap[..., tf.newaxis], (H, W))
 
     # Convert back to NumPy and squeeze channel dimension
-    heatmap = tf.squeeze(heatmap).numpy()    # shape: (H, W)
+    heatmap = tf.squeeze(heatmap).numpy()
 
     return heatmap, class_index
 
 
-
-
-
 def overlay_heatmap_on_image(img_array, heatmap, alpha=0.35):
+    """Overlay a jet heatmap on the original image."""
     import matplotlib.cm as cm
 
     img_array = np.asarray(img_array, dtype="float32")
@@ -335,8 +337,8 @@ def overlay_heatmap_on_image(img_array, heatmap, alpha=0.35):
     return overlay
 
 
-
 def plot_prob_bar(labels, probs):
+    """Bar plot of class probabilities."""
     fig, ax = plt.subplots(figsize=(4.5, 3.2))
     order = np.argsort(-probs)
     ax.bar([labels[i] for i in order], probs[order])
@@ -387,7 +389,7 @@ with TAB1:
 
         load_btn = st.button("Load / reload model")
 
-    # Auto - load from Drive onceif using Drive mode
+    # Auto-load from Drive once if using Drive mode
     if model is None and model_source == "Google Drive (hard-coded ID)":
         ensure_drive_available()
         try:
@@ -459,7 +461,6 @@ with TAB1:
             st.error(f"Grad-CAM generation failed: {e}")
             st.text("Traceback:")
             st.text(traceback.format_exc())
-
     else:
         st.info("Load a model and upload an image to run prediction + Grad-CAM.")
 
@@ -475,7 +476,7 @@ with TAB2:
 
     load_clicked = st.button("Load dataset metadata")
 
-    # Once clicked, keep the flag = True so later reruns仍然会执行下面的代码
+    # Once clicked, keep the flag = True so later reruns still execute the preview code
     if load_clicked:
         st.session_state["meta_loaded"] = True
 
@@ -493,7 +494,9 @@ with TAB2:
                 csv_bytes_full = gdrive_download_bytes(METADATA_FILE_ID)
 
             if not csv_bytes_full:
-                raise RuntimeError("gdrive_download_bytes returned empty bytes for METADATA_FILE_ID")
+                raise RuntimeError(
+                    "gdrive_download_bytes returned empty bytes for METADATA_FILE_ID"
+                )
 
             df_full = pd.read_csv(io.BytesIO(csv_bytes_full))
             st.success(f"Loaded FULL metadata CSV with {len(df_full)} rows.")
@@ -513,19 +516,21 @@ with TAB2:
             st.pyplot(fig)
             st.success("Metadata preview finished ✅")
 
-            # ---------- Step 3: 自动加载 SMALL 数据集做图片预览 ----------
+            # ---------- Step 3: automatically load SMALL dataset for image preview ----------
             st.markdown("---")
             st.subheader("Sample images from SMALL dataset in ZIP")
 
-            st.info("Step 2/3: Downloading SMALL dataset ZIP (metadata_small + images) ...")
+            st.info(
+                "Step 2/3: Downloading SMALL dataset ZIP (metadata_small + images) ..."
+            )
             with st.spinner("Downloading SMALL dataset ZIP from Drive ..."):
                 zip_bytes = get_dataset_zip_bytes()
 
             zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
             namelist = zf.namelist()
 
-            # 找到 small metadata 的 CSV：
-            # 优先选文件名里包含 "small" 的 .csv，找不到就用第一个 .csv
+            # Find the small metadata CSV inside the ZIP:
+            # Prefer a .csv whose filename contains 'small'; otherwise use the first .csv.
             small_csv_candidates = [n for n in namelist if n.lower().endswith(".csv")]
             if not small_csv_candidates:
                 raise RuntimeError("No CSV file found inside SMALL dataset ZIP.")
@@ -542,9 +547,8 @@ with TAB2:
             st.success(
                 f"Loaded SMALL metadata from '{small_csv_name}' with {len(df_small)} rows."
             )
-            st.write("SMALL metadata head:", df_small.head())
 
-            # 每个类别展示的样本数（针对 SMALL 数据集）
+            # Number of examples per class from the SMALL dataset
             n_per_cls = st.slider(
                 "Samples per class to display (SMALL dataset)",
                 1,
@@ -554,7 +558,7 @@ with TAB2:
 
             st.info("Step 3/3: Reading sample images from SMALL dataset ZIP ...")
 
-            # 从 ZIP 里构建 image_id -> 文件名映射（用之前写好的缓存函数）
+            # Build image_id -> filename map from the ZIP
             with st.spinner("Building image_id → ZIP member map (cached) ..."):
                 name_map = get_zip_name_map()
             st.write(f"DEBUG: found {len(name_map)} JPG files in SMALL ZIP.")
@@ -563,9 +567,10 @@ with TAB2:
 
             with st.spinner("Loading sample images per class from SMALL dataset ..."):
                 for cls in class_names:
-                    # 在 SMALL metadata 里选出这个类别且真正有图片的行
+                    # Select rows in SMALL metadata where this class exists and the image is present in the ZIP
                     subset = df_small[
-                        (df_small["dx"] == cls) & (df_small["image_id"].isin(available_ids))
+                        (df_small["dx"] == cls)
+                        & (df_small["image_id"].isin(available_ids))
                     ].copy()
                     total_cls = len(subset)
                     if total_cls == 0:
@@ -589,7 +594,9 @@ with TAB2:
                                     img = Image.open(io.BytesIO(img_bytes))
                                     st.image(img, caption=f"{img_id}.jpg")
                                 except Exception as img_err:
-                                    st.write(f"(image {img_id} not displayable: {img_err})")
+                                    st.write(
+                                        f"(image {img_id} not displayable: {img_err})"
+                                    )
 
             st.success("Sample images from SMALL dataset loaded ✅")
 
@@ -599,7 +606,6 @@ with TAB2:
             st.text(traceback.format_exc())
     else:
         st.info('Click "Load dataset metadata" to preview.')
-
 
 # ---------------------------
 # Tab 3 – Evaluation Overview
@@ -613,28 +619,39 @@ with TAB3:
     with st.spinner("Downloading evaluation plots from Google Drive ..."):
         loss_img = load_image_from_drive(EVAL_LOSS_FILE_ID)
         acc_img = load_image_from_drive(EVAL_ACC_FILE_ID)
-        cm_img  = load_image_from_drive(EVAL_CM_FILE_ID)
+        cm_img = load_image_from_drive(EVAL_CM_FILE_ID)
 
     c1, c2, c3 = st.columns(3)
 
     with c1:
         if loss_img is not None:
-            st.image(loss_img, caption="Training / Validation Loss", use_container_width=True)
+            st.image(
+                loss_img,
+                caption="Training / Validation Loss",
+                use_container_width=True,
+            )
         else:
             st.error("Failed to load Loss curve image from Google Drive.")
 
     with c2:
         if acc_img is not None:
-            st.image(acc_img, caption="Training / Validation Accuracy", use_container_width=True)
+            st.image(
+                acc_img,
+                caption="Training / Validation Accuracy",
+                use_container_width=True,
+            )
         else:
             st.error("Failed to load Accuracy curve image from Google Drive.")
 
     with c3:
         if cm_img is not None:
-            st.image(cm_img, caption="Confusion Matrix", use_container_width=True)
+            st.image(
+                cm_img,
+                caption="Confusion Matrix",
+                use_container_width=True,
+            )
         else:
             st.error("Failed to load Confusion Matrix image from Google Drive.")
-
 
 st.caption(
     "Hard-coded Google Drive IDs · Model + metadata + dataset ZIP are all fetched via Drive API."
