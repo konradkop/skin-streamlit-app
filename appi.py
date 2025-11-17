@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 
 import streamlit as st
 import tensorflow as tf
+from gradcam import make_gradcam_heatmap_tf2, overlay_heatmap_on_pil
 
 # ---------------------------
 # HARDCODED Google Drive IDs
@@ -270,113 +271,6 @@ def list_conv_like_layers(keras_model):
                     names.append(sub.name)
     return names
 
-
-def make_gradcam_heatmap(
-    img_array,
-    keras_model,
-    last_conv_layer_name=None,
-    class_index=None,
-):
-    """
-    Grad-CAM implementation using the gradient of the class score
-    w.r.t. a convolutional feature map.
-
-    img_array: (H, W, 3) or (1, H, W, 3) preprocessed image.
-    Returns: (heatmap in [0,1] with shape (H, W), class_index actually used)
-    """
-    # Ensure rank-4 input (1, H, W, 3)
-    img_array = np.asarray(img_array, dtype="float32")
-    if img_array.ndim == 3:
-        img_array = np.expand_dims(img_array, axis=0)
-    img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
-
-    # Pick conv layer
-    if last_conv_layer_name is None:
-        last_conv_layer_name = find_last_conv_like_layer(keras_model)
-    last_conv_layer = keras_model.get_layer(last_conv_layer_name)
-
-    # Build model: input -> (conv feature maps, predictions)
-    grad_model = tf.keras.models.Model(
-        inputs=keras_model.inputs,
-        outputs=[last_conv_layer.output, keras_model.output],
-    )
-
-    with tf.GradientTape() as tape:
-        conv_out, preds = grad_model(img_tensor, training=False)
-
-        # Some AutoKeras models return list/tuple
-        if isinstance(preds, (list, tuple)):
-            preds_tensor = preds[0]
-        else:
-            preds_tensor = preds
-
-        if class_index is None:
-            class_index = int(tf.argmax(preds_tensor[0]))
-
-        # Class score
-        class_channel = preds_tensor[:, class_index]
-
-    # Gradients of class score w.r.t. conv feature maps
-    grads = tape.gradient(class_channel, conv_out)
-    if grads is None:
-        raise RuntimeError(
-            "Gradients are None. Check conv layer name and model structure."
-        )
-
-    # Channel-wise weights via global average pooling
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))  # (C,)
-
-    # Remove batch dim for feature maps
-    conv_out = conv_out[0]  # (Hc, Wc, C)
-
-    # Weighted sum of feature maps
-    heatmap = tf.reduce_sum(conv_out * pooled_grads, axis=-1)  # (Hc, Wc)
-
-    # ReLU
-    heatmap = tf.nn.relu(heatmap)
-
-    # Normalize to [0,1]
-    max_val = tf.reduce_max(heatmap)
-    if max_val == 0:
-        return np.zeros_like(heatmap.numpy()), class_index
-    heatmap = heatmap / max_val
-
-    # Resize to input image size
-    H, W = img_array.shape[1], img_array.shape[2]
-    heatmap = tf.image.resize(heatmap[..., tf.newaxis], (H, W))
-    heatmap = tf.squeeze(heatmap).numpy()
-
-    return heatmap, class_index
-
-
-
-def overlay_heatmap_on_image_pil(img_pil, heatmap, alpha=0.35):
-    """Overlay a jet heatmap on the original-resolution image."""
-    import matplotlib.cm as cm
-
-    img = img_pil.convert("RGB")
-    img_array = np.asarray(img).astype("float32") / 255.0
-    H, W = img_array.shape[:2]
-
-    # Make sure heatmap matches original size
-    heatmap = np.asarray(heatmap, dtype="float32")
-    if heatmap.shape[0] != H or heatmap.shape[1] != W:
-        heatmap_resized = tf.image.resize(
-            heatmap[np.newaxis, ..., np.newaxis], (H, W)
-        )
-        heatmap_resized = tf.squeeze(heatmap_resized).numpy()
-    else:
-        heatmap_resized = heatmap
-
-    base = (img_array.clip(0, 1) * 255).astype(np.uint8)
-
-    cmap = cm.get_cmap("jet")
-    color_hm = (cmap(heatmap_resized)[..., :3] * 255).astype(np.uint8)
-
-    overlay = (alpha * color_hm + (1 - alpha) * base).astype(np.uint8)
-    return overlay
-
-
 def plot_prob_bar(labels, probs):
     """Bar plot of class probabilities."""
     fig, ax = plt.subplots(figsize=(4.5, 3.2))
@@ -496,35 +390,31 @@ with TAB1:
         st.pyplot(plot_prob_bar(labels, probs))
 
         try:
-            # Use the layer picked in the selectbox if available,
-            # otherwise fall back to automatic detection
-            last_conv_name = gradcam_layer_name or find_last_conv_like_layer(model)
+            last_conv_name = find_last_conv_like_layer(model)
 
-            heatmap, _ = make_gradcam_heatmap(
-                arr,
-                model,
-                last_conv_layer_name=last_conv_name,
-                class_index=pred_idx,
+            heatmap, _ = make_gradcam_heatmap_tf2(
+                arr, model, last_conv_layer_name=last_conv_name, class_index=pred_idx
             )
 
-            overlay = overlay_heatmap_on_image_pil(img_pil, heatmap, alpha=0.35)
+            overlay = overlay_heatmap_on_pil(img_pil, heatmap, alpha=0.35)
 
             cA, cB, cC = st.columns(3)
             with cA:
-                st.image(img_pil, caption="Input (original)")
+                st.image(img_pil, caption="Input (original)", use_container_width=True)
             with cB:
-                st.image(heatmap, clamp=True, caption=f"Grad-CAM heatmap\n(layer: {last_conv_name})")
+                st.image(
+                    heatmap,
+                    clamp=True,
+                    caption=f"Grad-CAM heatmap ({last_conv_name})",
+                    use_container_width=True,
+                )
             with cC:
-                st.image(overlay, caption="Overlay (jet × original)")
-        except Exception as e:
-            st.error(f"Grad-CAM generation failed: {e}")
-            st.text("Traceback:")
-            st.text(traceback.format_exc())
+                st.image(overlay, caption="Overlay (jet × original)", use_container_width=True)
 
         except Exception as e:
-            st.error(f"Grad-CAM generation failed: {e}")
-            st.text("Traceback:")
+            st.error(f"Grad-CAM failed: {e}")
             st.text(traceback.format_exc())
+
     else:
         st.info("Load a model and upload an image to run prediction + Grad-CAM.")
 

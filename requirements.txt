@@ -7,3 +7,5 @@ pillow
 google-api-python-client
 google-auth
 google-auth-httplib2
+keras
+opencv-python
