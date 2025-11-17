@@ -393,7 +393,7 @@ with TAB1:
             if gradcam_layer_name is not None:
                 layer_to_use = gradcam_layer_name
             else:
-                layer_to_use = find_last_conv_like_layer(model)
+                layer_to_use = 'block14_sepconv1'
 
             heatmap, _ = make_gradcam_heatmap_tf2(arr,model,last_conv_layer_name=layer_to_use,class_index=pred_idx,
             )
