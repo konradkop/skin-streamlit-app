@@ -272,11 +272,13 @@ def list_conv_like_layers(keras_model):
     return names
 
 def plot_prob_bar(labels, probs, full_label_map=None):
-    # If full names exist, convert labels to full names
+    # Decide what to display on x-axis
+    display_labels = list(labels)
+
     if full_label_map is not None:
-        display_labels = [full_label_map[l] for l in labels]
-    else:
-        display_labels = labels
+        # Only use full names if ALL labels are in the map
+        if all((lbl in full_label_map) for lbl in labels):
+            display_labels = [full_label_map[lbl] for lbl in labels]
 
     fig, ax = plt.subplots(figsize=(6, 4))
     order = np.argsort(-probs)
@@ -403,11 +405,17 @@ with TAB1:
             "nv": "Melanocytic nevi",
             "vasc": "Vascular lesions (angiomas, angiokeratomas, pyogenic granulomas, hemorrhage)"
         }
-        full_name = class_expl[labels[pred_idx]]
+        pred_label = labels[pred_idx]
 
-        st.markdown(f"**Predicted class:** `{labels[pred_idx]}` — **{full_name}**")
-
-        st.pyplot(plot_prob_bar(labels, probs, full_label_map=class_expl))
+        # Try to look up full name; if not found, just show the label itself
+        if isinstance(pred_label, (str, np.str_)) and pred_label in class_expl:
+            full_name = class_expl[pred_label]
+            st.markdown(f"**Predicted class:** `{pred_label}` — **{full_name}**")
+            st.pyplot(plot_prob_bar(labels, probs, full_label_map=class_expl))
+        else:
+            # Fallback: labels are numeric indices or not in class_expl yet
+            st.markdown(f"**Predicted class index:** {pred_idx}")
+            st.pyplot(plot_prob_bar(labels, probs))
 
         try:
             if gradcam_layer_name is not None:
