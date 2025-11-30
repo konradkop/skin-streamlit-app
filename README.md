@@ -17,7 +17,7 @@ The app leverages the **HAM10000 dataset** and our custom model to **detect and 
 - https://drive.google.com/drive/folders/1-YHidno3MYsLGc39ywruJNysQARYYEMz
 
 ## Link to deployed app:
-- [https://drive.google.com/drive/folders/1-YHidno3MYsLGc39ywruJNysQARYYEMz](https://skin-app-app-72wktsrcdywlf35otqbxhm.streamlit.app/)
+- https://skin-app-app-72wktsrcdywlf35otqbxhm.streamlit.app/
 
 ## Contributors
 - Konrad Kopko
